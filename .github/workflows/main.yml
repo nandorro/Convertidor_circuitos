@@ -1,153 +1,29 @@
-import os
-import sys
-import subprocess
-import tkinter as tk
-from tkinter import filedialog, messagebox
+name: Compilar Executable Windows
+on: [workflow_dispatch]
 
-def obtener_ruta_dot():
-    """Detecta si el programa se ejecuta congelado en un .exe de PyInstaller."""
-    if getattr(sys, 'frozen', False):
-        ruta_interna_dot = os.path.join(sys._MEIPASS, "graphviz_bin", "dot.exe")
-        if os.path.exists(ruta_interna_dot):
-            return ruta_interna_dot
-    return "dot"
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+    - name: Descargar codigo
+      uses: actions/checkout@v4
 
-def generar_nombre_unico(ruta_archivo):
-    """Genera un nombre correlativo (_2, _3, etc.) si el archivo destino ya existe."""
-    if not os.path.exists(ruta_archivo):
-        return ruta_archivo
+    - name: Configurar Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
 
-    directorio = os.path.dirname(ruta_archivo)
-    nombre_base, extension = os.path.splitext(os.path.basename(ruta_archivo))
-    
-    contador = 2
-    while True:
-        nuevo_nombre = f"{nombre_base}_{contador}{extension}"
-        nueva_ruta = os.path.join(directorio, nuevo_nombre)
-        if not os.path.exists(nueva_ruta):
-            return nueva_ruta
-        contador += 1
+    - name: Instalar PyInstaller
+      run: |
+        python -m pip install --upgrade pip
+        pip install pyinstaller
 
-def analizar_y_reparar_txt(ruta_txt):
-    """
-    Analiza el contenido del archivo al inicio de forma segura.
-    Repara el corte exacto del circuito sin alterar el formato visual.
-    """
-    try:
-        # Intentar leer el archivo (soportando UTF-8 o codificaciones locales de Windows)
-        try:
-            with open(ruta_txt, 'r', encoding='utf-8') as f:
-                contenido = f.read()
-        except UnicodeDecodeError:
-            with open(ruta_txt, 'r', encoding='cp1252', errors='ignore') as f:
-                contenido = f.read()
+    - name: Compilar Script a EXE
+      run: |
+        pyinstaller --onefile --noconsole convertidor.py
 
-        contenido_original = contenido
-
-        # CASO EXACTO 1: El texto se corta justo en 'Ejecución: Certificación<' y salta al siguiente nodo
-        patron_roto = 'Ejecución: Certificación<\nT0040_'
-        
-        # Estructura idéntica original reparando los cierres de etiquetas HTML y la separación de bloques
-        solucion_exacta = 'Ejecución: Certificación</TD></TR>\n</TABLE>>];\n\nT0040_'
-
-        if patron_roto in contenido:
-            contenido = contenido.replace(patron_roto, solucion_exacta)
-
-        # CASO EXACTO 2: El archivo se corta bruscamente al final en '</TAB_' o '</TAB'
-        if contenido.endswith('</TAB_') or contenido.endswith('</TAB'):
-            # Eliminamos el fragmento roto final
-            if contenido.endswith('</TAB_'):
-                contenido = contenido[:-6]
-            else:
-                contenido = contenido[:-5]
-            
-            # Reconstruimos el cierre exacto del último nodo y cerramos el digraph completo con la llave
-            contenido += 'Ejecución: Certificación</TD></TR>\n</TABLE>>];\n}'
-
-        # Asegurar siempre que el digraph termine cerrado si falta la llave final
-        if contenido.count('{') > contenido.count('}'):
-            contenido = contenido.strip()
-            if not contenido.endswith('}'):
-                contenido += '\n}'
-
-        # Si se detectaron y repararon errores, guardamos el archivo antes de continuar
-        if contenido != contenido_original:
-            with open(ruta_txt, 'w', encoding='utf-8') as f:
-                f.write(contenido)
-            print("Análisis previo: Se detectaron y repararon errores de estructura en el .txt")
-            
-    except Exception as e:
-        print(f"Aviso en análisis previo: No se pudo verificar el archivo de texto ({e})")
-
-def convertir_txt_a_pdf():
-    root = tk.Tk()
-    root.withdraw()
-
-    ruta_defecto_dir = r"C:\tcn\circuitos"
-
-    # Crear carpeta por defecto si no existe
-    if not os.path.exists(ruta_defecto_dir):
-        try:
-            os.makedirs(ruta_defecto_dir, exist_ok=True)
-        except Exception as e:
-            print(f"Aviso: No se pudo crear la carpeta inicial por defecto: {e}")
-
-    # 1. Buscar archivo origen
-    archivo_origen = filedialog.askopenfilename(
-        title="Selecciona el archivo TXT de Graphviz",
-        initialdir=ruta_defecto_dir,
-        filetypes=[("Archivos de texto", "*.txt"), ("Todos los archivos", "*.*")]
-    )
-    
-    if not archivo_origen:
-        return
-
-    # [NUEVO] ANALIZAR Y REPARAR EL ARCHIVO AQUÍ (Antes de preguntar dónde guardar)
-    analizar_y_reparar_txt(archivo_origen)
-
-    nombre_base = os.path.splitext(os.path.basename(archivo_origen))[0]
-    nombre_pdf_defecto = f"{nombre_base}.pdf"
-
-    # 2. Elegir destino (Ahora ya con el archivo corregido en segundo plano)
-    archivo_destino_sugerido = filedialog.asksaveasfilename(
-        title="Guardar archivo PDF como",
-        initialdir=ruta_defecto_dir,
-        initialfile=nombre_pdf_defecto,
-        defaultextension=".pdf",
-        filetypes=[("Archivos PDF", "*.pdf")]
-    )
-
-    if not archivo_destino_sugerido:
-        return
-
-    archivo_destino = generar_nombre_unico(archivo_destino_sugerido)
-
-    carpeta_destino = os.path.dirname(archivo_destino)
-    if not os.path.exists(carpeta_destino):
-        try:
-            os.makedirs(carpeta_destino, exist_ok=True)
-        except Exception as e:
-            messagebox.showerror("Error", f"No se pudo crear la carpeta destino:\n{e}")
-            return
-
-    # 3. Localizar el ejecutable 'dot' adecuado e invocarlo
-    ejecutable_dot = obtener_ruta_dot()
-    comando = [ejecutable_dot, "-Tpdf", archivo_origen, "-o", archivo_destino]
-
-    try:
-        subprocess.run(comando, check=True, capture_output=True, text=True)
-        messagebox.showinfo("Éxito", f"Archivo convertido correctamente:\n{archivo_destino}")
-
-    except FileNotFoundError:
-        messagebox.showerror(
-            "Error de Sistema", 
-            "No se encontró el motor de Graphviz 'dot'. Asegúrate de compilar incluyendo los binarios portables."
-        )
-    except subprocess.CalledProcessError as e:
-        messagebox.showerror(
-            "Error de Graphviz (Sintaxis)", 
-            f"El archivo contiene errores de sintaxis en su estructura de texto.\n\nDetalles:\n{e.stderr}"
-        )
-
-if __name__ == "__main__":
-    convertir_txt_a_pdf()
+    - name: Guardar el archivo EXE resultante
+      uses: actions/upload-artifact@v4
+      with:
+        name: Convertidor-Windows-EXE
+        path: dist/convertidor.exe
